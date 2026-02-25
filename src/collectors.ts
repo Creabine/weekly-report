@@ -45,6 +45,11 @@ export interface JiraItem {
   status: string;
 }
 
+export interface GitCommit {
+  repo: string;
+  message: string;
+}
+
 export interface GitRepoSummary {
   repo: string;
   commitCount: number;
@@ -54,6 +59,7 @@ export interface WeeklyData {
   dateRange: DateRange;
   mrs: MRItem[];
   jiraIssues: JiraItem[];
+  commits: GitCommit[];
   gitSummary: GitRepoSummary[];
 }
 
@@ -242,15 +248,20 @@ async function jiraLogin(config: Config): Promise<string> {
   return [...cookies, sessionCookie].join('; ');
 }
 
-export async function collectJiraIssues(config: Config, _range: DateRange, mrs: MRItem[]): Promise<JiraItem[]> {
+export async function collectJiraIssues(config: Config, mrs: MRItem[], commits: GitCommit[]): Promise<JiraItem[]> {
   console.error('[Jira] 收集 Issues...');
 
-  // 从 MR 标题、分支名和描述中提取 Jira key
+  // 从 MR 标题、分支名、描述和 commit message 中提取 Jira key
   const keyPattern = /[A-Z][A-Z0-9]+-\d+/g;
   const keysSet = new Set<string>();
   for (const mr of mrs) {
     const text = `${mr.title} ${mr.sourceBranch} ${mr.description || ''}`;
     for (const match of text.matchAll(keyPattern)) {
+      keysSet.add(match[0]);
+    }
+  }
+  for (const commit of commits) {
+    for (const match of commit.message.matchAll(keyPattern)) {
       keysSet.add(match[0]);
     }
   }
@@ -329,13 +340,13 @@ function discoverRepos(config: Config): string[] {
   return repos;
 }
 
-export function collectGitCommits(config: Config, range: DateRange): GitRepoSummary[] {
+export function collectGitCommits(config: Config, range: DateRange): { commits: GitCommit[]; summary: GitRepoSummary[] } {
   console.error('[Git] 收集 Commits...');
 
   const repoPaths = discoverRepos(config);
   if (repoPaths.length === 0) {
     console.error('  未发现匹配的 Git 仓库');
-    return [];
+    return { commits: [], summary: [] };
   }
 
   // --before 不包含当天，需要加一天
@@ -344,18 +355,22 @@ export function collectGitCommits(config: Config, range: DateRange): GitRepoSumm
   const beforeStr = beforeDate.toISOString().slice(0, 10);
 
   console.error(`  发现 ${repoPaths.length} 个 GitLab 仓库`);
-  const results: GitRepoSummary[] = [];
+  const commits: GitCommit[] = [];
+  const summary: GitRepoSummary[] = [];
 
   for (const repoPath of repoPaths) {
     const repoName = path.basename(repoPath);
     try {
       const output = execSync(
-        `git log --author="${config.GIT_AUTHOR} <" --after="${range.from}" --before="${beforeStr}" --oneline`,
+        `git log --author="${config.GIT_AUTHOR} <" --after="${range.from}" --before="${beforeStr}" --format="%s"`,
         { cwd: repoPath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
       );
       const lines = output.trim().split('\n').filter(Boolean);
       if (lines.length > 0) {
-        results.push({ repo: repoName, commitCount: lines.length });
+        for (const msg of lines) {
+          commits.push({ repo: repoName, message: msg });
+        }
+        summary.push({ repo: repoName, commitCount: lines.length });
         console.error(`  ${repoName}: ${lines.length} commits`);
       }
     } catch {
@@ -363,7 +378,7 @@ export function collectGitCommits(config: Config, range: DateRange): GitRepoSumm
     }
   }
 
-  return results;
+  return { commits, summary };
 }
 
 // ================== 汇总收集 ==================
@@ -374,12 +389,13 @@ export async function collectAll(config: Config, range: DateRange): Promise<Week
     return [] as MRItem[];
   });
 
-  const jiraIssues = await collectJiraIssues(config, range, mrs).catch((e) => {
+  const { commits, summary: gitSummary } = collectGitCommits(config, range);
+
+  // 从 MR 和 commits 中提取 Jira key
+  const jiraIssues = await collectJiraIssues(config, mrs, commits).catch((e) => {
     console.error(`  Jira 收集失败: ${(e as Error).message}`);
     return [] as JiraItem[];
   });
 
-  const gitSummary = collectGitCommits(config, range);
-
-  return { dateRange: range, mrs, jiraIssues, gitSummary };
+  return { dateRange: range, mrs, jiraIssues, commits, gitSummary };
 }

@@ -23,39 +23,33 @@ function capitalizeState(state: string): string {
 }
 
 export function generateMarkdown(data: WeeklyData): string {
-  const { dateRange, mrs, jiraIssues, gitSummary } = data;
+  const { dateRange, mrs, jiraIssues, commits, gitSummary } = data;
   const lines: string[] = [];
+  const jiraMap = new Map(jiraIssues.map(i => [i.key, i]));
+  const keyPattern = /[A-Z][A-Z0-9]+-\d+/g;
 
   lines.push(`# 周报 ${formatDate(dateRange.from)} - ${formatDate(dateRange.to)}`);
   lines.push('');
 
-  // 本周完成 - 按 Jira issue 类型分组
+  // 本周完成 - 按 commit 粒度，关联 Jira 信息
   lines.push('## 本周完成');
   lines.push('');
 
-  const bugs = jiraIssues.filter(i => /bug/i.test(i.type));
-  const features = jiraIssues.filter(i => !/bug/i.test(i.type));
-
-  if (features.length > 0) {
-    lines.push('### 需求开发');
-    for (const issue of features) {
-      lines.push(`- [${issue.key}] ${issue.summary} (${issue.status})`);
+  if (commits.length > 0) {
+    for (const commit of commits) {
+      // 尝试从 commit message 中找 Jira key
+      const keys = [...commit.message.matchAll(keyPattern)].map(m => m[0]);
+      const jira = keys.map(k => jiraMap.get(k)).find(Boolean);
+      if (jira) {
+        lines.push(`- [${jira.key}] ${commit.message} (${jira.status})`);
+      } else {
+        lines.push(`- ${commit.message}`);
+      }
     }
-    lines.push('');
+  } else {
+    lines.push('_本周无提交记录_');
   }
-
-  if (bugs.length > 0) {
-    lines.push('### Bug 修复');
-    for (const issue of bugs) {
-      lines.push(`- [${issue.key}] ${issue.summary} (${issue.status})`);
-    }
-    lines.push('');
-  }
-
-  if (jiraIssues.length === 0) {
-    lines.push('_本周无 Jira Issue 记录_');
-    lines.push('');
-  }
+  lines.push('');
 
   // Merge Requests 表格
   if (mrs.length > 0) {
