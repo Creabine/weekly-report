@@ -9,6 +9,7 @@ export interface Config {
   LDAP_USERNAME: string;
   LDAP_PASSWORD: string;
   GITLAB_HOST: string;
+  GITLAB_TOKEN: string;
   JIRA_HOST: string;
   GIT_AUTHOR: string;
   GIT_REPOS_DIR: string;
@@ -28,7 +29,9 @@ export interface DateRange {
 
 export interface MRItem {
   title: string;
+  description: string | null;
   state: string;
+  sourceBranch: string;
   targetBranch: string;
   url: string;
   createdAt: string;
@@ -77,7 +80,7 @@ export function loadConfig(): Config {
     env[key] = value;
   }
 
-  const required = ['LDAP_USERNAME', 'LDAP_PASSWORD', 'GITLAB_HOST', 'JIRA_HOST'];
+  const required = ['LDAP_USERNAME', 'LDAP_PASSWORD', 'GITLAB_HOST', 'GITLAB_TOKEN', 'JIRA_HOST'];
   for (const key of required) {
     if (!env[key]) {
       console.error(`错误: .env 缺少必填配置 ${key}`);
@@ -89,6 +92,7 @@ export function loadConfig(): Config {
     LDAP_USERNAME: env.LDAP_USERNAME,
     LDAP_PASSWORD: env.LDAP_PASSWORD,
     GITLAB_HOST: env.GITLAB_HOST,
+    GITLAB_TOKEN: env.GITLAB_TOKEN,
     JIRA_HOST: env.JIRA_HOST,
     GIT_AUTHOR: env.GIT_AUTHOR || env.LDAP_USERNAME,
     GIT_REPOS_DIR: env.GIT_REPOS_DIR || '',
@@ -154,7 +158,9 @@ function httpsRequest<T>(
 
 interface GitLabMR {
   title: string;
+  description: string | null;
   state: string;
+  source_branch: string;
   target_branch: string;
   web_url: string;
   created_at: string;
@@ -165,7 +171,6 @@ interface GitLabMR {
 export async function collectGitLabMRs(config: Config, range: DateRange): Promise<MRItem[]> {
   console.error('[GitLab] 收集 Merge Requests...');
 
-  const token = Buffer.from(`${config.LDAP_USERNAME}:${config.LDAP_PASSWORD}`).toString('base64');
   const params = new URLSearchParams({
     author_username: config.LDAP_USERNAME,
     updated_after: `${range.from}T00:00:00Z`,
@@ -175,25 +180,30 @@ export async function collectGitLabMRs(config: Config, range: DateRange): Promis
 
   const url = `${config.GITLAB_HOST}/api/v4/merge_requests?${params}`;
   const { data } = await httpsRequest<GitLabMR[]>(url, {
-    headers: { Authorization: `Basic ${token}` },
+    headers: { 'PRIVATE-TOKEN': config.GITLAB_TOKEN },
   });
 
-  // 本地二次过滤：created_at 或 merged_at 在范围内
+  // 本地二次过滤：created_at、merged_at 或 updated_at 在范围内
   const fromDate = new Date(`${range.from}T00:00:00Z`);
   const toDate = new Date(`${range.to}T23:59:59Z`);
 
   const filtered = data.filter((mr) => {
+    if (mr.state === 'closed') return false;
     const created = new Date(mr.created_at);
     const merged = mr.merged_at ? new Date(mr.merged_at) : null;
+    const updated = new Date(mr.updated_at);
     return (created >= fromDate && created <= toDate) ||
-           (merged && merged >= fromDate && merged <= toDate);
+           (merged && merged >= fromDate && merged <= toDate) ||
+           (updated >= fromDate && updated <= toDate);
   });
 
   console.error(`  找到 ${filtered.length} 个 MR`);
 
   return filtered.map((mr) => ({
     title: mr.title,
+    description: mr.description,
     state: mr.state,
+    sourceBranch: mr.source_branch,
     targetBranch: mr.target_branch,
     url: mr.web_url,
     createdAt: mr.created_at,
@@ -232,11 +242,29 @@ async function jiraLogin(config: Config): Promise<string> {
   return [...cookies, sessionCookie].join('; ');
 }
 
-export async function collectJiraIssues(config: Config, range: DateRange): Promise<JiraItem[]> {
+export async function collectJiraIssues(config: Config, _range: DateRange, mrs: MRItem[]): Promise<JiraItem[]> {
   console.error('[Jira] 收集 Issues...');
 
+  // 从 MR 标题、分支名和描述中提取 Jira key
+  const keyPattern = /[A-Z][A-Z0-9]+-\d+/g;
+  const keysSet = new Set<string>();
+  for (const mr of mrs) {
+    const text = `${mr.title} ${mr.sourceBranch} ${mr.description || ''}`;
+    for (const match of text.matchAll(keyPattern)) {
+      keysSet.add(match[0]);
+    }
+  }
+
+  if (keysSet.size === 0) {
+    console.error('  MR 中未发现 Jira Key');
+    return [];
+  }
+
+  const keys = [...keysSet];
+  console.error(`  从 MR 中提取到 ${keys.length} 个 Jira Key: ${keys.join(', ')}`);
+
   const cookies = await jiraLogin(config);
-  const jql = `assignee = currentUser() AND updated >= "${range.from}"`;
+  const jql = `key in (${keys.join(',')})`;
   const params = new URLSearchParams({
     jql,
     maxResults: '100',
@@ -310,6 +338,11 @@ export function collectGitCommits(config: Config, range: DateRange): GitRepoSumm
     return [];
   }
 
+  // --before 不包含当天，需要加一天
+  const beforeDate = new Date(`${range.to}T00:00:00Z`);
+  beforeDate.setDate(beforeDate.getDate() + 1);
+  const beforeStr = beforeDate.toISOString().slice(0, 10);
+
   console.error(`  发现 ${repoPaths.length} 个 GitLab 仓库`);
   const results: GitRepoSummary[] = [];
 
@@ -317,7 +350,7 @@ export function collectGitCommits(config: Config, range: DateRange): GitRepoSumm
     const repoName = path.basename(repoPath);
     try {
       const output = execSync(
-        `git log --author="${config.GIT_AUTHOR}" --after="${range.from}" --before="${range.to}" --oneline`,
+        `git log --author="${config.GIT_AUTHOR} <" --after="${range.from}" --before="${beforeStr}" --oneline`,
         { cwd: repoPath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
       );
       const lines = output.trim().split('\n').filter(Boolean);
@@ -336,16 +369,15 @@ export function collectGitCommits(config: Config, range: DateRange): GitRepoSumm
 // ================== 汇总收集 ==================
 
 export async function collectAll(config: Config, range: DateRange): Promise<WeeklyData> {
-  const [mrs, jiraIssues] = await Promise.all([
-    collectGitLabMRs(config, range).catch((e) => {
-      console.error(`  GitLab 收集失败: ${(e as Error).message}`);
-      return [] as MRItem[];
-    }),
-    collectJiraIssues(config, range).catch((e) => {
-      console.error(`  Jira 收集失败: ${(e as Error).message}`);
-      return [] as JiraItem[];
-    }),
-  ]);
+  const mrs = await collectGitLabMRs(config, range).catch((e) => {
+    console.error(`  GitLab 收集失败: ${(e as Error).message}`);
+    return [] as MRItem[];
+  });
+
+  const jiraIssues = await collectJiraIssues(config, range, mrs).catch((e) => {
+    console.error(`  Jira 收集失败: ${(e as Error).message}`);
+    return [] as JiraItem[];
+  });
 
   const gitSummary = collectGitCommits(config, range);
 
