@@ -1,0 +1,4 @@
+.env
+drafts/
+node_modules/
+dist/
