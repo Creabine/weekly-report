@@ -13,9 +13,10 @@ export async function sendMail(
     throw new Error('缺少收件人，请在 .env 中配置 MAIL_TO');
   }
 
+  const formatDate = (d: string) => d.replace(/-/g, '.');
   const subject = config.MAIL_SUBJECT_TEMPLATE
-    .replace('{author}', config.LDAP_USERNAME)
-    .replace('{dateRange}', `${dateRange.from} ~ ${dateRange.to}`);
+    .replace('{author}', config.MAIL_AUTHOR_NAME)
+    .replace('{dateRange}', `${formatDate(dateRange.from)}-${formatDate(dateRange.to)}`);
 
   const transporter = nodemailer.createTransport({
     host: config.SMTP_HOST,

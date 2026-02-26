@@ -127,8 +127,10 @@ export async function renderHTML(markdown: string): Promise<string> {
   const htmlBody = await marked(markdown, { renderer });
   const template = getRandomTemplate();
 
+  const footer = 'Powered by <a href="https://github.com/Creabine/weekly-report" target="_blank">weekly-report</a>';
+
   if (template) {
-    return template.replace('{{content}}', htmlBody);
+    return template.replace('{{content}}', htmlBody).replace('{{footer}}', footer);
   }
 
   // 无模板时使用内联样式
@@ -137,6 +139,7 @@ export async function renderHTML(markdown: string): Promise<string> {
 <head><meta charset="utf-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; color: #333;">
 ${htmlBody}
+<footer style="color: #999; font-size: 12px; padding-top: 15px;">${footer}</footer>
 </body>
 </html>`;
 }

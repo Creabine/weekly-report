@@ -20,6 +20,7 @@ export interface Config {
   MAIL_TO: string[];
   MAIL_CC: string[];
   MAIL_SUBJECT_TEMPLATE: string;
+  MAIL_AUTHOR_NAME: string;
 }
 
 export interface DateRange {
@@ -108,7 +109,8 @@ export function loadConfig(): Config {
     SMTP_PASS: env.SMTP_PASS || '',
     MAIL_TO: (env.MAIL_TO || '').split(',').map(s => s.trim()).filter(Boolean),
     MAIL_CC: (env.MAIL_CC || '').split(',').map(s => s.trim()).filter(Boolean),
-    MAIL_SUBJECT_TEMPLATE: env.MAIL_SUBJECT_TEMPLATE || '周报 - {author} - {dateRange}',
+    MAIL_SUBJECT_TEMPLATE: env.MAIL_SUBJECT_TEMPLATE || '【工作周报-前端】{dateRange} {author}',
+    MAIL_AUTHOR_NAME: env.MAIL_AUTHOR_NAME || env.LDAP_USERNAME,
   };
 }
 
