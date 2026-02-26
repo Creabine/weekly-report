@@ -22,6 +22,7 @@ export interface Config {
   MAIL_SUBJECT_TEMPLATE: string;
   MAIL_AUTHOR_NAME: string;
   MAIL_THREAD: boolean;
+  MAIL_TEMPLATE: string;
 }
 
 export interface DateRange {
@@ -113,6 +114,7 @@ export function loadConfig(): Config {
     MAIL_SUBJECT_TEMPLATE: env.MAIL_SUBJECT_TEMPLATE || '【工作周报-前端】{dateRange} {author}',
     MAIL_AUTHOR_NAME: env.MAIL_AUTHOR_NAME || env.LDAP_USERNAME,
     MAIL_THREAD: env.MAIL_THREAD === 'true',
+    MAIL_TEMPLATE: env.MAIL_TEMPLATE || 'email-cerberus-light',
   };
 }
 

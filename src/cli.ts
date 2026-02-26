@@ -140,7 +140,8 @@ async function cmdPreview(): Promise<void> {
   }
 
   const markdown = fs.readFileSync(draftPath, 'utf-8');
-  const html = await renderHTML(markdown);
+  const config = loadConfig();
+  const html = await renderHTML(markdown, config.MAIL_TEMPLATE);
 
   const tmpPath = path.resolve(process.cwd(), 'drafts', 'preview.html');
   fs.writeFileSync(tmpPath, html, 'utf-8');
@@ -162,7 +163,7 @@ async function cmdSend(): Promise<void> {
 
   const config = loadConfig();
   const markdown = fs.readFileSync(draftPath, 'utf-8');
-  const html = await renderHTML(markdown);
+  const html = await renderHTML(markdown, config.MAIL_TEMPLATE);
 
   // 从文件名解析日期范围
   const fileName = path.basename(draftPath, '.md');

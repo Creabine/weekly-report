@@ -108,18 +108,16 @@ export function getLatestDraft(): string | null {
 
 // ================== HTML 渲染 ==================
 
-function getRandomTemplate(): string | null {
+function getTemplate(templateName: string): string | null {
   const templatesDir = path.resolve(process.cwd(), 'templates');
-  if (!fs.existsSync(templatesDir)) return null;
-
-  const templates = fs.readdirSync(templatesDir).filter(f => f.startsWith('email-') && f.endsWith('.html'));
-  if (templates.length === 0) return null;
-
-  const chosen = templates[Math.floor(Math.random() * templates.length)];
-  return fs.readFileSync(path.join(templatesDir, chosen), 'utf-8');
+  const filePath = path.join(templatesDir, `${templateName}.html`);
+  if (fs.existsSync(filePath)) {
+    return fs.readFileSync(filePath, 'utf-8');
+  }
+  return null;
 }
 
-export async function renderHTML(markdown: string): Promise<string> {
+export async function renderHTML(markdown: string, templateName = 'email-cerberus-light'): Promise<string> {
   const renderer = new marked.Renderer();
   renderer.link = ({ href, text }) => {
     return `<a href="${href}" target="_blank">${text}</a>`;
@@ -127,7 +125,7 @@ export async function renderHTML(markdown: string): Promise<string> {
   const htmlBody = (await marked(markdown, { renderer }))
     .replace(/<ul>/g, '<ul style="padding-left:0;margin:8px 0;list-style:none;">')
     .replace(/<li>/g, '<li style="position:relative;padding:8px 12px 8px 24px;margin-bottom:4px;background:#f8f9fb;border-radius:6px;font-size:13.5px;line-height:1.6;color:#374151;list-style:none;"><span style="position:absolute;left:10px;color:#667eea;font-size:12px;">▸</span>');
-  const template = getRandomTemplate();
+  const template = getTemplate(templateName);
 
   const footer = 'Powered by <a href="https://github.com/Creabine/weekly-report" target="_blank">weekly-report</a>';
 
