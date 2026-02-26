@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { marked } from 'marked';
-import type { WeeklyData, JiraItem, Config } from './collectors.ts';
+import type { WeeklyData, JiraItem, MRDetail, Config } from './collectors.ts';
 
 // ================== Markdown 草稿生成 ==================
 
@@ -23,34 +23,42 @@ function capitalizeState(state: string): string {
 }
 
 export function generateMarkdown(data: WeeklyData, config: Config): string {
-  const { dateRange, mrs, jiraIssues, commits, gitSummary } = data;
+  const { dateRange, mrs, mrDetails } = data;
   const lines: string[] = [];
-  const jiraMap = new Map(jiraIssues.map(i => [i.key, i]));
   const keyPattern = /[A-Z][A-Z0-9]+-\d+/g;
   const jiraUrl = (key: string) => `${config.JIRA_HOST}/browse/${key}`;
 
   lines.push(`# 周报 ${formatDate(dateRange.from)} - ${formatDate(dateRange.to)}`);
   lines.push('');
 
-  // 本周完成 - 按 commit 粒度，关联 Jira 信息
+  // 本周完成 - 按 MR 分组，列出 commits
   lines.push('## 本周完成');
   lines.push('');
 
-  if (commits.length > 0) {
-    for (const commit of commits) {
-      // 尝试从 commit message 中找 Jira key
-      const keys = [...commit.message.matchAll(keyPattern)].map(m => m[0]);
-      const jira = keys.map(k => jiraMap.get(k)).find(Boolean);
-      if (jira) {
-        lines.push(`- [${jira.key}](${jiraUrl(jira.key)}) ${commit.message} (${jira.status})`);
+  if (mrDetails.length > 0) {
+    for (const detail of mrDetails) {
+      const { mr, commits, deployStatus, isHotfix } = detail;
+      // 从 MR title 提取 Jira key
+      const keys = [...mr.title.matchAll(keyPattern)].map(m => m[0]);
+      const jiraKey = keys[0];
+      const statusTag = `(${deployStatus})`;
+      const hotfixTag = isHotfix ? ' [hotfix]' : '';
+
+      if (jiraKey) {
+        lines.push(`### [${jiraKey}](${jiraUrl(jiraKey)}) ${mr.title} ${statusTag}${hotfixTag}`);
       } else {
+        lines.push(`### ${mr.title} ${statusTag}${hotfixTag}`);
+      }
+
+      for (const commit of commits) {
         lines.push(`- ${commit.message}`);
       }
+      lines.push('');
     }
   } else {
-    lines.push('_本周无提交记录_');
+    lines.push('_本周无 MR 记录_');
+    lines.push('');
   }
-  lines.push('');
 
   // Merge Requests 表格
   if (mrs.length > 0) {
@@ -59,15 +67,6 @@ export function generateMarkdown(data: WeeklyData, config: Config): string {
     lines.push('|----|------|----------|');
     for (const mr of mrs) {
       lines.push(`| [${mr.title}](${mr.url}) | ${stateEmoji(mr.state)} ${capitalizeState(mr.state)} | ${mr.targetBranch} |`);
-    }
-    lines.push('');
-  }
-
-  // Git 提交摘要
-  if (gitSummary.length > 0) {
-    lines.push('## 代码提交摘要');
-    for (const repo of gitSummary) {
-      lines.push(`- ${repo.repo}: ${repo.commitCount} commits`);
     }
     lines.push('');
   }

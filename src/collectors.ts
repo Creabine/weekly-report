@@ -1,7 +1,6 @@
 import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
 
 // ================== 类型定义 ==================
 
@@ -11,8 +10,6 @@ export interface Config {
   GITLAB_HOST: string;
   GITLAB_TOKEN: string;
   JIRA_HOST: string;
-  GIT_AUTHOR: string;
-  GIT_REPOS_DIR: string;
   SMTP_HOST: string;
   SMTP_PORT: number;
   SMTP_USER: string;
@@ -39,6 +36,21 @@ export interface MRItem {
   url: string;
   createdAt: string;
   mergedAt: string | null;
+  projectId: number;
+  iid: number;
+  mergeCommitSha: string | null;
+}
+
+export interface MRCommit {
+  sha: string;
+  message: string;
+}
+
+export interface MRDetail {
+  mr: MRItem;
+  commits: MRCommit[];
+  deployStatus: string; // 开发中 | 已提测 | 灰度中 | 已上线
+  isHotfix: boolean;
 }
 
 export interface JiraItem {
@@ -48,22 +60,11 @@ export interface JiraItem {
   status: string;
 }
 
-export interface GitCommit {
-  repo: string;
-  message: string;
-}
-
-export interface GitRepoSummary {
-  repo: string;
-  commitCount: number;
-}
-
 export interface WeeklyData {
   dateRange: DateRange;
   mrs: MRItem[];
+  mrDetails: MRDetail[];
   jiraIssues: JiraItem[];
-  commits: GitCommit[];
-  gitSummary: GitRepoSummary[];
 }
 
 // ================== 配置加载 ==================
@@ -103,8 +104,6 @@ export function loadConfig(): Config {
     GITLAB_HOST: env.GITLAB_HOST,
     GITLAB_TOKEN: env.GITLAB_TOKEN,
     JIRA_HOST: env.JIRA_HOST,
-    GIT_AUTHOR: env.GIT_AUTHOR || env.LDAP_USERNAME,
-    GIT_REPOS_DIR: env.GIT_REPOS_DIR || '',
     SMTP_HOST: env.SMTP_HOST || 'smtp.exmail.qq.com',
     SMTP_PORT: parseInt(env.SMTP_PORT || '465', 10),
     SMTP_USER: env.SMTP_USER || '',
@@ -179,6 +178,9 @@ interface GitLabMR {
   created_at: string;
   merged_at: string | null;
   updated_at: string;
+  project_id: number;
+  iid: number;
+  merge_commit_sha: string | null;
 }
 
 export async function collectGitLabMRs(config: Config, range: DateRange): Promise<MRItem[]> {
@@ -221,7 +223,70 @@ export async function collectGitLabMRs(config: Config, range: DateRange): Promis
     url: mr.web_url,
     createdAt: mr.created_at,
     mergedAt: mr.merged_at,
+    projectId: mr.project_id,
+    iid: mr.iid,
+    mergeCommitSha: mr.merge_commit_sha,
   }));
+}
+
+// ================== MR 详情收集 ==================
+
+const FLOW_BRANCHES = new Set(['main', 'master', 'gray-release', 'release']);
+
+function isMergeBranchMR(mr: MRItem): boolean {
+  return FLOW_BRANCHES.has(mr.sourceBranch) && FLOW_BRANCHES.has(mr.targetBranch);
+}
+
+async function fetchMRCommits(config: Config, mr: MRItem): Promise<MRCommit[]> {
+  const url = `${config.GITLAB_HOST}/api/v4/projects/${mr.projectId}/merge_requests/${mr.iid}/commits?per_page=100`;
+  const { data } = await httpsRequest<Array<{ id: string; message: string }>>(url, {
+    headers: { 'PRIVATE-TOKEN': config.GITLAB_TOKEN },
+  });
+  return data.map(c => ({ sha: c.id, message: c.message.split('\n')[0] }));
+}
+
+async function fetchCommitRefs(config: Config, projectId: number, sha: string): Promise<string[]> {
+  const url = `${config.GITLAB_HOST}/api/v4/projects/${projectId}/repository/commits/${sha}/refs?type=branch`;
+  const { data } = await httpsRequest<Array<{ name: string }>>(url, {
+    headers: { 'PRIVATE-TOKEN': config.GITLAB_TOKEN },
+  });
+  return data.map(r => r.name);
+}
+
+function resolveDeployStatus(branches: string[]): string {
+  const set = new Set(branches);
+  if (set.has('release')) return '已上线';
+  if (set.has('gray-release')) return '灰度中';
+  if (set.has('main') || set.has('master')) return '已提测';
+  return '开发中';
+}
+
+export async function collectMRDetails(config: Config, mrs: MRItem[]): Promise<MRDetail[]> {
+  console.error('[GitLab] 收集 MR 详情...');
+
+  const featureMRs = mrs.filter(mr => !isMergeBranchMR(mr));
+  const details: MRDetail[] = [];
+
+  for (const mr of featureMRs) {
+    const commits = await fetchMRCommits(config, mr);
+    const isHotfix = mr.targetBranch !== 'main' && mr.targetBranch !== 'master';
+
+    let deployStatus: string;
+    if (mr.state !== 'merged') {
+      deployStatus = '开发中';
+    } else if (mr.mergeCommitSha) {
+      const refs = await fetchCommitRefs(config, mr.projectId, mr.mergeCommitSha);
+      deployStatus = resolveDeployStatus(refs);
+    } else {
+      // fallback: 从 targetBranch 推断
+      deployStatus = resolveDeployStatus([mr.targetBranch]);
+    }
+
+    console.error(`  ${mr.title} → ${deployStatus}${isHotfix ? ' [hotfix]' : ''}`);
+    details.push({ mr, commits, deployStatus, isHotfix });
+  }
+
+  return details;
 }
 
 // ================== Jira Issue 收集 ==================
@@ -255,20 +320,15 @@ async function jiraLogin(config: Config): Promise<string> {
   return [...cookies, sessionCookie].join('; ');
 }
 
-export async function collectJiraIssues(config: Config, mrs: MRItem[], commits: GitCommit[]): Promise<JiraItem[]> {
+export async function collectJiraIssues(config: Config, mrs: MRItem[]): Promise<JiraItem[]> {
   console.error('[Jira] 收集 Issues...');
 
-  // 从 MR 标题、分支名、描述和 commit message 中提取 Jira key
+  // 从 MR 标题、分支名、描述中提取 Jira key
   const keyPattern = /[A-Z][A-Z0-9]+-\d+/g;
   const keysSet = new Set<string>();
   for (const mr of mrs) {
     const text = `${mr.title} ${mr.sourceBranch} ${mr.description || ''}`;
     for (const match of text.matchAll(keyPattern)) {
-      keysSet.add(match[0]);
-    }
-  }
-  for (const commit of commits) {
-    for (const match of commit.message.matchAll(keyPattern)) {
       keysSet.add(match[0]);
     }
   }
@@ -304,90 +364,6 @@ export async function collectJiraIssues(config: Config, mrs: MRItem[], commits: 
   }));
 }
 
-// ================== Git Commits 收集 ==================
-
-function getGitRemoteUrl(repoPath: string): string | null {
-  try {
-    return execSync('git remote get-url origin', {
-      cwd: repoPath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-function isGitLabRepo(remoteUrl: string, gitlabHost: string): boolean {
-  // 匹配 SSH: git@gitlab.mokahr.com:xxx 或 HTTPS: https://gitlab.mokahr.com/xxx
-  const hostname = new URL(gitlabHost).hostname;
-  return remoteUrl.includes(hostname);
-}
-
-function discoverRepos(config: Config): string[] {
-  let dir = config.GIT_REPOS_DIR;
-  if (!dir) return [];
-  if (dir.startsWith('~')) {
-    dir = path.join(process.env.HOME || '', dir.slice(1));
-  }
-  if (!fs.existsSync(dir)) return [];
-
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  const repos: string[] = [];
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const repoPath = path.join(dir, entry.name);
-    if (!fs.existsSync(path.join(repoPath, '.git'))) continue;
-
-    const remoteUrl = getGitRemoteUrl(repoPath);
-    if (remoteUrl && isGitLabRepo(remoteUrl, config.GITLAB_HOST)) {
-      repos.push(repoPath);
-    }
-  }
-
-  return repos;
-}
-
-export function collectGitCommits(config: Config, range: DateRange): { commits: GitCommit[]; summary: GitRepoSummary[] } {
-  console.error('[Git] 收集 Commits...');
-
-  const repoPaths = discoverRepos(config);
-  if (repoPaths.length === 0) {
-    console.error('  未发现匹配的 Git 仓库');
-    return { commits: [], summary: [] };
-  }
-
-  // --before 不包含当天，需要加一天
-  const beforeDate = new Date(`${range.to}T00:00:00Z`);
-  beforeDate.setDate(beforeDate.getDate() + 1);
-  const beforeStr = beforeDate.toISOString().slice(0, 10);
-
-  console.error(`  发现 ${repoPaths.length} 个 GitLab 仓库`);
-  const commits: GitCommit[] = [];
-  const summary: GitRepoSummary[] = [];
-
-  for (const repoPath of repoPaths) {
-    const repoName = path.basename(repoPath);
-    try {
-      const output = execSync(
-        `git log --author="${config.GIT_AUTHOR} <" --after="${range.from}" --before="${beforeStr}" --format="%s"`,
-        { cwd: repoPath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
-      );
-      const lines = output.trim().split('\n').filter(Boolean);
-      if (lines.length > 0) {
-        for (const msg of lines) {
-          commits.push({ repo: repoName, message: msg });
-        }
-        summary.push({ repo: repoName, commitCount: lines.length });
-        console.error(`  ${repoName}: ${lines.length} commits`);
-      }
-    } catch {
-      console.error(`  ${repoName}: 读取失败`);
-    }
-  }
-
-  return { commits, summary };
-}
-
 // ================== 汇总收集 ==================
 
 export async function collectAll(config: Config, range: DateRange): Promise<WeeklyData> {
@@ -396,13 +372,16 @@ export async function collectAll(config: Config, range: DateRange): Promise<Week
     return [] as MRItem[];
   });
 
-  const { commits, summary: gitSummary } = collectGitCommits(config, range);
+  const mrDetails = await collectMRDetails(config, mrs).catch((e) => {
+    console.error(`  MR 详情收集失败: ${(e as Error).message}`);
+    return [] as MRDetail[];
+  });
 
-  // 从 MR 和 commits 中提取 Jira key
-  const jiraIssues = await collectJiraIssues(config, mrs, commits).catch((e) => {
+  // 从 MR 中提取 Jira key
+  const jiraIssues = await collectJiraIssues(config, mrs).catch((e) => {
     console.error(`  Jira 收集失败: ${(e as Error).message}`);
     return [] as JiraItem[];
   });
 
-  return { dateRange: range, mrs, jiraIssues, commits, gitSummary };
+  return { dateRange: range, mrs, mrDetails, jiraIssues };
 }
