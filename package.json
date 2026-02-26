@@ -14,8 +14,8 @@
     "dev": "node --experimental-strip-types src/cli.ts",
     "draft": "node --experimental-strip-types src/cli.ts draft",
     "preview": "node --experimental-strip-types src/cli.ts preview",
-    "send": "node --experimental-strip-types src/cli.ts send",
-    "run": "node --experimental-strip-types src/cli.ts run",
+    "sendDraft": "node --experimental-strip-types src/cli.ts send",
+    "send": "node --experimental-strip-types src/cli.ts run",
     "build": "tsc && echo '#!/usr/bin/env node' | cat - dist/cli.js > dist/cli.tmp && mv dist/cli.tmp dist/cli.js",
     "prepublishOnly": "pnpm run build"
   },

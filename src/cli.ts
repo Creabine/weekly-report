@@ -114,7 +114,20 @@ function parseArgs(): CLIArgs {
 async function resolveDateRange(args: CLIArgs): Promise<DateRange> {
   if (args.from && args.to) return { from: args.from, to: args.to };
   if (args.interactive) return interactiveDateRange();
-  return getThisWeekRange();
+
+  const defaultRange = getThisWeekRange();
+  const hint = `${defaultRange.from} ~ ${defaultRange.to}`;
+  const input = await ask(`? 日期范围 [${hint}]（回车确认，或输入 from,to 如 2026-02-16,2026-02-20）: `);
+
+  if (!input) return defaultRange;
+
+  const parts = input.split(',').map(s => s.trim());
+  if (parts.length === 2 && /^\d{4}-\d{2}-\d{2}$/.test(parts[0]) && /^\d{4}-\d{2}-\d{2}$/.test(parts[1])) {
+    return { from: parts[0], to: parts[1] };
+  }
+
+  console.error('格式不对，使用默认范围');
+  return defaultRange;
 }
 
 // ================== 命令实现 ==================
@@ -191,20 +204,13 @@ async function cmdRun(args: CLIArgs): Promise<void> {
   // 尝试用编辑器打开
   const editor = process.env.EDITOR || 'code';
   try {
-    if (editor === 'code') {
-      execSync(`code --wait "${draftPath}"`, { stdio: 'inherit' });
-    } else {
-      execSync(`${editor} "${draftPath}"`, { stdio: 'inherit' });
-    }
+    execSync(`${editor} "${draftPath}"`, { stdio: 'ignore' });
   } catch {
     console.error(`请手动编辑草稿: ${draftPath}`);
-    const done = await ask('编辑完成后按回车继续...');
   }
 
-  const sendConfirm = await ask('是否发送? (y/N) ');
-  if (sendConfirm.toLowerCase() === 'y') {
-    await cmdSend();
-  }
+  await ask('编辑草稿后按回车继续...');
+  await cmdSend();
 }
 
 function printHelp(): void {
