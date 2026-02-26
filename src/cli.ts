@@ -126,7 +126,7 @@ async function cmdDraft(args: CLIArgs): Promise<void> {
   console.error(`\n📋 收集 ${range.from} ~ ${range.to} 的工作数据...\n`);
 
   const data = await collectAll(config, range);
-  const markdown = generateMarkdown(data);
+  const markdown = generateMarkdown(data, config);
   const filePath = saveDraft(markdown, range.to);
 
   console.error(`\n✅ 草稿已生成: ${filePath}`);

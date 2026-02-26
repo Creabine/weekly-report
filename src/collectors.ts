@@ -136,9 +136,10 @@ function httpsRequest<T>(
         },
       },
       (res) => {
-        let data = '';
-        res.on('data', (chunk: Buffer) => (data += chunk.toString()));
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
         res.on('end', () => {
+          const data = Buffer.concat(chunks).toString('utf-8');
           const cookies = (res.headers['set-cookie'] as string[] || [])
             .map(c => c.split(';')[0]).filter(Boolean);
           try {

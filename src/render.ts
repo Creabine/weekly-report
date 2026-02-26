@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { marked } from 'marked';
-import type { WeeklyData, JiraItem } from './collectors.ts';
+import type { WeeklyData, JiraItem, Config } from './collectors.ts';
 
 // ================== Markdown 草稿生成 ==================
 
@@ -22,11 +22,12 @@ function capitalizeState(state: string): string {
   return state.charAt(0).toUpperCase() + state.slice(1);
 }
 
-export function generateMarkdown(data: WeeklyData): string {
+export function generateMarkdown(data: WeeklyData, config: Config): string {
   const { dateRange, mrs, jiraIssues, commits, gitSummary } = data;
   const lines: string[] = [];
   const jiraMap = new Map(jiraIssues.map(i => [i.key, i]));
   const keyPattern = /[A-Z][A-Z0-9]+-\d+/g;
+  const jiraUrl = (key: string) => `${config.JIRA_HOST}/browse/${key}`;
 
   lines.push(`# 周报 ${formatDate(dateRange.from)} - ${formatDate(dateRange.to)}`);
   lines.push('');
@@ -41,7 +42,7 @@ export function generateMarkdown(data: WeeklyData): string {
       const keys = [...commit.message.matchAll(keyPattern)].map(m => m[0]);
       const jira = keys.map(k => jiraMap.get(k)).find(Boolean);
       if (jira) {
-        lines.push(`- [${jira.key}] ${commit.message} (${jira.status})`);
+        lines.push(`- [${jira.key}](${jiraUrl(jira.key)}) ${commit.message} (${jira.status})`);
       } else {
         lines.push(`- ${commit.message}`);
       }
