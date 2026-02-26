@@ -120,7 +120,11 @@ function getRandomTemplate(): string | null {
 }
 
 export async function renderHTML(markdown: string): Promise<string> {
-  const htmlBody = await marked(markdown);
+  const renderer = new marked.Renderer();
+  renderer.link = ({ href, text }) => {
+    return `<a href="${href}" target="_blank">${text}</a>`;
+  };
+  const htmlBody = await marked(markdown, { renderer });
   const template = getRandomTemplate();
 
   if (template) {
