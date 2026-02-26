@@ -124,7 +124,9 @@ export async function renderHTML(markdown: string): Promise<string> {
   renderer.link = ({ href, text }) => {
     return `<a href="${href}" target="_blank">${text}</a>`;
   };
-  const htmlBody = await marked(markdown, { renderer });
+  const htmlBody = (await marked(markdown, { renderer }))
+    .replace(/<ul>/g, '<ul style="padding-left:0;margin:8px 0;list-style:none;">')
+    .replace(/<li>/g, '<li style="position:relative;padding:8px 12px 8px 24px;margin-bottom:4px;background:#f8f9fb;border-radius:6px;font-size:13.5px;line-height:1.6;color:#374151;list-style:none;"><span style="position:absolute;left:10px;color:#667eea;font-size:12px;">▸</span>');
   const template = getRandomTemplate();
 
   const footer = 'Powered by <a href="https://github.com/Creabine/weekly-report" target="_blank">weekly-report</a>';

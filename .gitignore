@@ -1,4 +1,5 @@
 .env
+.mail-thread.json
 drafts/
 node_modules/
 dist/

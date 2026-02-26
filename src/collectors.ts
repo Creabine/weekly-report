@@ -21,6 +21,7 @@ export interface Config {
   MAIL_CC: string[];
   MAIL_SUBJECT_TEMPLATE: string;
   MAIL_AUTHOR_NAME: string;
+  MAIL_THREAD: boolean;
 }
 
 export interface DateRange {
@@ -111,6 +112,7 @@ export function loadConfig(): Config {
     MAIL_CC: (env.MAIL_CC || '').split(',').map(s => s.trim()).filter(Boolean),
     MAIL_SUBJECT_TEMPLATE: env.MAIL_SUBJECT_TEMPLATE || '【工作周报-前端】{dateRange} {author}',
     MAIL_AUTHOR_NAME: env.MAIL_AUTHOR_NAME || env.LDAP_USERNAME,
+    MAIL_THREAD: env.MAIL_THREAD === 'true',
   };
 }
 

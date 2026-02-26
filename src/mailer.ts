@@ -1,5 +1,22 @@
 import nodemailer from 'nodemailer';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Config, DateRange } from './collectors.ts';
+
+const THREAD_FILE = path.resolve(process.cwd(), '.mail-thread.json');
+
+function loadThread(): { messageId?: string; references?: string[] } {
+  try {
+    return JSON.parse(fs.readFileSync(THREAD_FILE, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveThread(messageId: string, prevReferences: string[]) {
+  const references = [...prevReferences, messageId];
+  fs.writeFileSync(THREAD_FILE, JSON.stringify({ messageId, references }, null, 2));
+}
 
 export async function sendMail(
   config: Config,
@@ -28,15 +45,26 @@ export async function sendMail(
     },
   });
 
+  const thread = config.MAIL_THREAD ? loadThread() : {};
+  const headers: Record<string, string> = {};
+  if (thread.messageId) {
+    headers['In-Reply-To'] = thread.messageId;
+    headers['References'] = (thread.references || []).join(' ');
+  }
+
   console.error(`[邮件] 发送到 ${config.MAIL_TO.join(', ')}...`);
 
-  await transporter.sendMail({
+  const info = await transporter.sendMail({
     from: config.SMTP_USER,
     to: config.MAIL_TO.join(', '),
     cc: config.MAIL_CC.length > 0 ? config.MAIL_CC.join(', ') : undefined,
     subject,
     html,
+    headers,
   });
 
+  if (config.MAIL_THREAD) {
+    saveThread(info.messageId, thread.references || []);
+  }
   console.error('  发送成功!');
 }
