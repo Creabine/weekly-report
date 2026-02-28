@@ -237,12 +237,18 @@ function isMergeBranchMR(mr: MRItem): boolean {
   return FLOW_BRANCHES.has(mr.sourceBranch) && FLOW_BRANCHES.has(mr.targetBranch);
 }
 
+const NOISE_COMMIT_RE = /^Merge (remote-tracking )?branch /;
+
 async function fetchMRCommits(config: Config, mr: MRItem): Promise<MRCommit[]> {
   const url = `${config.GITLAB_HOST}/api/v4/projects/${mr.projectId}/merge_requests/${mr.iid}/commits?per_page=100`;
-  const { data } = await httpsRequest<Array<{ id: string; message: string }>>(url, {
+  const { data } = await httpsRequest<Array<{ id: string; message: string; author_email: string }>>(url, {
     headers: { 'PRIVATE-TOKEN': config.GITLAB_TOKEN },
   });
-  return data.map(c => ({ sha: c.id, message: c.message.split('\n')[0] }));
+  const username = config.LDAP_USERNAME.toLowerCase();
+  return data
+    .filter(c => c.author_email.toLowerCase().split('@')[0] === username)
+    .map(c => ({ sha: c.id, message: c.message.split('\n')[0] }))
+    .filter(c => !NOISE_COMMIT_RE.test(c.message));
 }
 
 async function fetchCommitRefs(config: Config, projectId: number, sha: string): Promise<string[]> {
@@ -269,6 +275,8 @@ export async function collectMRDetails(config: Config, mrs: MRItem[]): Promise<M
 
   for (const mr of featureMRs) {
     const commits = await fetchMRCommits(config, mr);
+    if (commits.length === 0) continue;
+
     const isHotfix = mr.targetBranch !== 'main' && mr.targetBranch !== 'master';
 
     let deployStatus: string;
